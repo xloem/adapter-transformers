@@ -135,6 +135,7 @@ CONFIG_MAPPING_NAMES = OrderedDict(
         ("wavlm", "WavLMConfig"),
         ("data2vec-audio", "Data2VecAudioConfig"),
         ("data2vec-text", "Data2VecTextConfig"),
+        ("longt5", "LongT5Config"),
     ]
 )
 
@@ -144,6 +145,7 @@ CONFIG_ARCHIVE_MAP_MAPPING_NAMES = OrderedDict(
         ("yolos", "YOLOS_PRETRAINED_CONFIG_ARCHIVE_MAP"),
         ("dpt", "DPT_PRETRAINED_CONFIG_ARCHIVE_MAP"),
         ("glpn", "GLPN_PRETRAINED_CONFIG_ARCHIVE_MAP"),
+        ("longt5", "LONGT5_PRETRAINED_CONFIG_ARCHIVE_MAP"),
         ("maskformer", "MASKFORMER_PRETRAINED_CONFIG_ARCHIVE_MAP"),
         ("poolformer", "POOLFORMER_PRETRAINED_CONFIG_ARCHIVE_MAP"),
         ("convnext", "CONVNEXT_PRETRAINED_CONFIG_ARCHIVE_MAP"),
@@ -362,6 +364,7 @@ MODEL_NAMES_MAPPING = OrderedDict(
         ("data2vec-text", "Data2VecText"),
         ("data2vec-vision", "Data2VecVision"),
         ("dit", "DiT"),
+        ("longt5", "LongT5"),
     ]
 )
 

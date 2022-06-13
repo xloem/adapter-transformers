@@ -65,6 +65,7 @@ MODEL_MAPPING_NAMES = OrderedDict(
         ("flava", "FlavaModel"),
         ("bigbird_pegasus", "BigBirdPegasusModel"),
         ("deit", "DeiTModel"),
+        ("longt5", "LongT5Model"),
         ("luke", "LukeModel"),
         ("detr", "DetrModel"),
         ("gpt_neo", "GPTNeoModel"),
@@ -180,6 +181,7 @@ MODEL_WITH_LM_HEAD_MAPPING_NAMES = OrderedDict(
     [
         # Model with LM heads mapping
         ("yoso", "YosoForMaskedLM"),
+        ("longt5", "LongT5ForConditionalGeneration"),
         ("nystromformer", "NystromformerForMaskedLM"),
         ("plbart", "PLBartForConditionalGeneration"),
         ("qdqbert", "QDQBertForMaskedLM"),
@@ -402,6 +404,7 @@ MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING_NAMES = OrderedDict(
         ("tapex", "BartForConditionalGeneration"),
         ("plbart", "PLBartForConditionalGeneration"),
         ("bigbird_pegasus", "BigBirdPegasusForConditionalGeneration"),
+        ("longt5", "LongT5ForConditionalGeneration"),
         ("m2m_100", "M2M100ForConditionalGeneration"),
         ("led", "LEDForConditionalGeneration"),
         ("blenderbot-small", "BlenderbotSmallForConditionalGeneration"),

@@ -45,6 +45,7 @@ FLAX_MODEL_MAPPING_NAMES = OrderedDict(
         ("gptj", "FlaxGPTJModel"),
         ("electra", "FlaxElectraModel"),
         ("clip", "FlaxCLIPModel"),
+        ("longt5", "FlaxLongT5Model"),
         ("vit", "FlaxViTModel"),
         ("mbart", "FlaxMBartModel"),
         ("t5", "FlaxT5Model"),
@@ -66,6 +67,7 @@ FLAX_MODEL_FOR_PRETRAINING_MAPPING_NAMES = OrderedDict(
         ("big_bird", "FlaxBigBirdForPreTraining"),
         ("bart", "FlaxBartForConditionalGeneration"),
         ("electra", "FlaxElectraForPreTraining"),
+        ("longt5", "FlaxLongT5ForConditionalGeneration"),
         ("mbart", "FlaxMBartForConditionalGeneration"),
         ("t5", "FlaxT5ForConditionalGeneration"),
         ("mt5", "FlaxMT5ForConditionalGeneration"),
@@ -94,6 +96,7 @@ FLAX_MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING_NAMES = OrderedDict(
     [
         # Model for Seq2Seq Causal LM mapping
         ("blenderbot-small", "FlaxBlenderbotSmallForConditionalGeneration"),
+        ("longt5", "FlaxLongT5ForConditionalGeneration"),
         ("pegasus", "FlaxPegasusForConditionalGeneration"),
         ("bart", "FlaxBartForConditionalGeneration"),
         ("mbart", "FlaxMBartForConditionalGeneration"),
