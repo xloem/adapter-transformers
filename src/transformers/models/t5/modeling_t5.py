@@ -46,7 +46,7 @@ from ...modeling_outputs import (
     Seq2SeqModelOutput,
 )
 from ...modeling_utils import PreTrainedModel
-from ...pytorch_utils import find_pruneable_heads_and_indices, prune_linear_layer
+from ...pytorch_utils import ALL_LAYERNORM_LAYERS, find_pruneable_heads_and_indices, prune_linear_layer
 from ...utils import (
     DUMMY_INPUTS,
     DUMMY_MASK,
@@ -286,6 +286,8 @@ except ImportError:
 except Exception:
     logger.warning("discovered apex but it failed to load, falling back to T5LayerNorm")
     pass
+
+ALL_LAYERNORM_LAYERS.append(T5LayerNorm)
 
 
 class T5DenseReluDense(nn.Module):
