@@ -26,6 +26,20 @@ from torch.nn import CrossEntropyLoss
 from torch.utils.checkpoint import checkpoint
 
 from ...activations import ACT2FN
+from ...adapters.composition import adjust_tensors_for_parallel
+from ...adapters.context import ForwardContext
+from ...adapters.lora import Linear as LoRALinear
+from ...adapters.mixins.longt5 import (
+    LongT5CrossAttentionLayerAdaptersMixin,
+    LongT5FFLayerAdaptersMixin,
+    LongT5ModelAdaptersMixin,
+    LongT5ModelWithHeadsAdaptersMixin,
+    LongT5SelfAttentionLayerAdaptersMixin,
+    LongT5LocalSelfAttentionLayerAdaptersMixin,
+    LongT5TransientGlobalSelfAttentionLayerAdaptersMixin,
+)
+from ...adapters.model_mixin import InvertibleAdaptersMixin
+from ...adapters.prefix_tuning import PrefixTuningShim
 from ...modeling_outputs import (
     BaseModelOutput,
     BaseModelOutputWithPastAndCrossAttentions,
@@ -301,9 +315,10 @@ class LongT5DenseGatedActDense(nn.Module):
 
 
 # Copied from transformers.models.t5.modeling_t5.T5LayerFF with T5->LongT5
-class LongT5LayerFF(nn.Module):
+class LongT5LayerFF(LongT5FFLayerAdaptersMixin, nn.Module):
     def __init__(self, config: LongT5Config):
         super().__init__()
+        self.config = config
         if config.is_gated_act:
             self.DenseReluDense = LongT5DenseGatedActDense(config)
         else:
@@ -311,17 +326,18 @@ class LongT5LayerFF(nn.Module):
 
         self.layer_norm = LongT5LayerNorm(config.d_model, eps=config.layer_norm_epsilon)
         self.dropout = nn.Dropout(config.dropout_rate)
+        self._init_adapter_modules()
 
     def forward(self, hidden_states):
         forwarded_states = self.layer_norm(hidden_states)
         forwarded_states = self.DenseReluDense(forwarded_states)
-        hidden_states = hidden_states + self.dropout(forwarded_states)
+        hidden_states = self.adapter_layer_forward(hidden_states, self.dropout(forwarded_states), None)
         return hidden_states
 
 
 # Copied from transformers.models.t5.modeling_t5.T5Attention with T5->LongT5
 class LongT5Attention(nn.Module):
-    def __init__(self, config: LongT5Config, has_relative_attention_bias=False):
+    def __init__(self, config: LongT5Config, has_relative_attention_bias=False, location_key: Optional[str] = None):
         super().__init__()
         self.is_decoder = config.is_decoder
         self.has_relative_attention_bias = has_relative_attention_bias
@@ -343,6 +359,8 @@ class LongT5Attention(nn.Module):
             self.relative_attention_bias = nn.Embedding(self.relative_attention_num_buckets, self.n_heads)
         self.pruned_heads = set()
         self.gradient_checkpointing = False
+
+        self.prefix_tuning = PrefixTuningShim(location_key + "_prefix" if location_key else None, config)
 
     def prune_heads(self, heads):
         if len(heads) == 0:
@@ -494,6 +512,9 @@ class LongT5Attention(nn.Module):
         value_states = project(
             hidden_states, self.v, key_value_states, past_key_value[1] if past_key_value is not None else None
         )
+
+        key_states, value_states, mask = self.prefix_tuning(key_states, value_states, mask)
+        key_length = key_states.size(2)
 
         # compute scores
         scores = torch.matmul(
@@ -731,7 +752,7 @@ class LongT5LocalAttention(nn.Module):
 
 
 class LongT5TransientGlobalAttention(nn.Module):
-    def __init__(self, config: LongT5Config, has_relative_attention_bias: bool = False) -> None:
+    def __init__(self, config: LongT5Config, has_relative_attention_bias: bool = False, location_key: Optional[str] = None) -> None:
         super().__init__()
         self.is_decoder = config.is_decoder
         self.has_relative_attention_bias = has_relative_attention_bias
@@ -761,6 +782,8 @@ class LongT5TransientGlobalAttention(nn.Module):
         if self.has_relative_attention_bias:
             self.global_relative_attention_bias = nn.Embedding(self.relative_attention_num_buckets, self.n_heads)
         self.global_input_layer_norm = LongT5LayerNorm(config.d_model, eps=config.layer_norm_epsilon)
+
+        self.prefix_tuning = PrefixTuningShim(location_key + "_prefix" if location_key else None, config)
 
     # Copied from transformers.models.t5.modeling_t5.T5Attention.prune_heads
     def prune_heads(self, heads):
@@ -930,6 +953,9 @@ class LongT5TransientGlobalAttention(nn.Module):
         key_states = torch.cat([key_states, side_key_states], dim=2)
         value_states = torch.cat([value_states, side_value_states], dim=2)
 
+        key_states, value_states, mask = self.prefix_tuning(key_states, value_states, mask)
+        key_length = key_states.size(2)
+
         # Compute scores -> (batch_size, num_block, n_heads, block_len, 3 * block_len + global_seq_len)
         scores = torch.einsum("...qhd,...khd->...hqk", query_states, key_states)
 
@@ -992,12 +1018,16 @@ class LongT5TransientGlobalAttention(nn.Module):
 
 
 # Copied from transformers.models.t5.modeling_t5.T5LayerSelfAttention with T5->LongT5
-class LongT5LayerSelfAttention(nn.Module):
-    def __init__(self, config, has_relative_attention_bias=False):
+class LongT5LayerSelfAttention(LongT5SelfAttentionLayerAdaptersMixin, nn.Module):
+    def __init__(self, config, has_relative_attention_bias=False, location_key: Optional[str] = None):
         super().__init__()
-        self.SelfAttention = LongT5Attention(config, has_relative_attention_bias=has_relative_attention_bias)
+        self.config = config
+        self.SelfAttention = LongT5Attention(
+            config, has_relative_attention_bias=has_relative_attention_bias, location_key=location_key
+        )
         self.layer_norm = LongT5LayerNorm(config.d_model, eps=config.layer_norm_epsilon)
         self.dropout = nn.Dropout(config.dropout_rate)
+        self._init_adapter_modules()
 
     def forward(
         self,
@@ -1019,19 +1049,21 @@ class LongT5LayerSelfAttention(nn.Module):
             use_cache=use_cache,
             output_attentions=output_attentions,
         )
-        hidden_states = hidden_states + self.dropout(attention_output[0])
+        hidden_states = self.adapter_layer_forward(hidden_states, self.dropout(attention_output[0]), None)
         outputs = (hidden_states,) + attention_output[1:]  # add attentions if we output them
         return outputs
 
 
-class LongT5LayerLocalSelfAttention(nn.Module):
+class LongT5LayerLocalSelfAttention(LongT5LocalSelfAttentionLayerAdaptersMixin, nn.Module):
     """Local self attention used in encoder"""
 
-    def __init__(self, config, has_relative_attention_bias=False):
+    def __init__(self, config, has_relative_attention_bias=False, location_key: Optional[str] = None):
         super().__init__()
-        self.LocalSelfAttention = LongT5LocalAttention(config, has_relative_attention_bias=has_relative_attention_bias)
+        self.config = config
+        self.LocalSelfAttention = LongT5LocalAttention(config, has_relative_attention_bias=has_relative_attention_bias, location_key=location_key)
         self.layer_norm = LongT5LayerNorm(config.d_model, eps=config.layer_norm_epsilon)
         self.dropout = nn.Dropout(config.dropout_rate)
+        self._init_adapter_modules()
 
     def forward(
         self,
@@ -1050,21 +1082,23 @@ class LongT5LayerLocalSelfAttention(nn.Module):
             layer_head_mask=layer_head_mask,
             output_attentions=output_attentions,
         )
-        hidden_states = hidden_states + self.dropout(attention_output[0])
+        hidden_states = self.adapter_layer_forward(hidden_states, self.dropout(attention_output[0]), None)
         outputs = (hidden_states,) + attention_output[1:]  # add attentions if we output them
         return outputs
 
 
-class LongT5LayerTransientGlobalSelfAttention(nn.Module):
+class LongT5LayerTransientGlobalSelfAttention(LongT5TransientGlobalSelfAttentionLayerAdaptersMixin, nn.Module):
     """Transient-Global self attention used in encoder"""
 
-    def __init__(self, config, has_relative_attention_bias=False):
+    def __init__(self, config, has_relative_attention_bias=False, location_key: Optional[str] = None):
         super().__init__()
+        self.config = config
         self.TransientGlobalSelfAttention = LongT5TransientGlobalAttention(
-            config, has_relative_attention_bias=has_relative_attention_bias
+            config, has_relative_attention_bias=has_relative_attention_bias, location_key=location_key
         )
         self.layer_norm = LongT5LayerNorm(config.d_model, eps=config.layer_norm_epsilon)
         self.dropout = nn.Dropout(config.dropout_rate)
+        self._init_adapter_modules()
 
     def forward(
         self,
@@ -1083,18 +1117,20 @@ class LongT5LayerTransientGlobalSelfAttention(nn.Module):
             layer_head_mask=layer_head_mask,
             output_attentions=output_attentions,
         )
-        hidden_states = hidden_states + self.dropout(attention_output[0])
+        hidden_states = self.adapter_layer_forward(hidden_states, self.dropout(attention_output[0]), None)
         outputs = (hidden_states,) + attention_output[1:]  # add attentions if we output them
         return outputs
 
 
 # Copied from transformers.models.t5.modeling_t5.T5LayerCrossAttention with T5->LongT5
-class LongT5LayerCrossAttention(nn.Module):
+class LongT5LayerCrossAttention(LongT5CrossAttentionLayerAdaptersMixin, nn.Module):
     def __init__(self, config):
         super().__init__()
-        self.EncDecAttention = LongT5Attention(config, has_relative_attention_bias=False)
+        self.config = config
+        self.EncDecAttention = LongT5Attention(config, has_relative_attention_bias=False, location_key="cross")
         self.layer_norm = LongT5LayerNorm(config.d_model, eps=config.layer_norm_epsilon)
         self.dropout = nn.Dropout(config.dropout_rate)
+        self._init_adapter_modules()
 
     def forward(
         self,
@@ -1120,7 +1156,7 @@ class LongT5LayerCrossAttention(nn.Module):
             query_length=query_length,
             output_attentions=output_attentions,
         )
-        layer_output = hidden_states + self.dropout(attention_output[0])
+        layer_output = self.adapter_layer_forward(hidden_states, self.dropout(attention_output[0]), None)
         outputs = (layer_output,) + attention_output[1:]  # add attentions if we output them
         return outputs
 
@@ -1141,7 +1177,12 @@ class LongT5Block(nn.Module):
                 f"but got {config.encoder_attention_type}."
             )
         self.layer = nn.ModuleList()
-        self.layer.append(attention_layer(config, has_relative_attention_bias=has_relative_attention_bias))
+        location_key = "self" if self.is_decoder else "encoder"
+        self.layer.append(
+            attention_layer(
+                config, has_relative_attention_bias=has_relative_attention_bias, location_key=location_key
+            )
+        )
         if self.is_decoder:
             self.layer.append(LongT5LayerCrossAttention(config))
 
@@ -1336,7 +1377,7 @@ class LongT5PreTrainedModel(PreTrainedModel):
         return shifted_input_ids
 
 
-class LongT5Stack(LongT5PreTrainedModel):
+class LongT5Stack(InvertibleAdaptersMixin, LongT5PreTrainedModel):
     def __init__(self, config, embed_tokens=None):
         super().__init__(config)
 
@@ -1459,6 +1500,8 @@ class LongT5Stack(LongT5PreTrainedModel):
         encoder_decoder_position_bias = None
 
         hidden_states = self.dropout(inputs_embeds)
+        if not self.is_decoder:
+            hidden_states = self.invertible_adapters_forward(hidden_states)
 
         for i, (layer_module, past_key_value) in enumerate(zip(self.block, past_key_values)):
             layer_head_mask = head_mask[i]
@@ -1722,7 +1765,7 @@ num_heads)`.
     "The bare LONGT5 Model transformer outputting raw hidden-states without any specific head on top.",
     LONGT5_START_DOCSTRING,
 )
-class LongT5Model(LongT5PreTrainedModel):
+class LongT5Model(LongT5ModelAdaptersMixin, LongT5PreTrainedModel):
     _keys_to_ignore_on_load_missing = [
         r"encoder.embed_tokens.weight",
         r"decoder.embed_tokens.weight",
@@ -1739,13 +1782,17 @@ class LongT5Model(LongT5PreTrainedModel):
         encoder_config.is_decoder = False
         encoder_config.use_cache = False
         encoder_config.is_encoder_decoder = False
+        encoder_config.adapters = config.adapters
         self.encoder = LongT5Stack(encoder_config, self.shared)
 
         decoder_config = copy.deepcopy(config)
         decoder_config.is_decoder = True
         decoder_config.is_encoder_decoder = False
         decoder_config.num_layers = config.num_decoder_layers
+        decoder_config.adapters = config.adapters
         self.decoder = LongT5Stack(decoder_config, self.shared)
+
+        self._init_adapter_modules()
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1874,8 +1921,8 @@ class LongT5Model(LongT5PreTrainedModel):
         )
 
 
-@add_start_docstrings("""LONGT5 Model with a `language modeling` head on top.""", LONGT5_START_DOCSTRING)
-class LongT5ForConditionalGeneration(LongT5PreTrainedModel):
+@add_start_docstrings("""LongT5 Model with a `language modeling` head on top.""", LONGT5_START_DOCSTRING)
+class LongT5ForConditionalGeneration(LongT5ModelWithHeadsAdaptersMixin, LongT5ModelAdaptersMixin, LongT5PreTrainedModel):
     _keys_to_ignore_on_load_missing = [
         r"encoder.embed_tokens.weight",
         r"decoder.embed_tokens.weight",
@@ -1895,15 +1942,19 @@ class LongT5ForConditionalGeneration(LongT5PreTrainedModel):
         encoder_config.is_decoder = False
         encoder_config.use_cache = False
         encoder_config.is_encoder_decoder = False
+        encoder_config.adapters = config.adapters
         self.encoder = LongT5Stack(encoder_config, self.shared)
 
         decoder_config = copy.deepcopy(config)
         decoder_config.is_decoder = True
         decoder_config.is_encoder_decoder = False
         decoder_config.num_layers = config.num_decoder_layers
+        decoder_config.adapters = config.adapters
         self.decoder = LongT5Stack(decoder_config, self.shared)
 
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
+
+        self._init_adapter_modules()
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -2033,7 +2084,11 @@ class LongT5ForConditionalGeneration(LongT5PreTrainedModel):
             # See https://github.com/tensorflow/mesh/blob/fa19d69eafc9a482aff0b59ddd96b025c0cb207d/mesh_tensorflow/transformer/transformer.py#L586
             sequence_output = sequence_output * (self.model_dim**-0.5)
 
-        lm_logits = self.lm_head(sequence_output)
+        projected_output = self.encoder.invertible_adapters_forward(sequence_output, rev=True)
+
+        self.invertible_adapters_forward(projected_output, rev=True)
+
+        lm_logits = self.lm_head(projected_output)
 
         loss = None
         if labels is not None:
@@ -2117,7 +2172,7 @@ class LongT5ForConditionalGeneration(LongT5PreTrainedModel):
     "The bare LONGT5 Model transformer outputting encoder's raw hidden-states without any specific head on top.",
     LONGT5_START_DOCSTRING,
 )
-class LongT5EncoderModel(LongT5PreTrainedModel):
+class LongT5EncoderModel(LongT5ModelAdaptersMixin, LongT5PreTrainedModel):
     authorized_missing_keys = [
         r"encoder.embed_tokens.weight",
     ]
@@ -2133,6 +2188,8 @@ class LongT5EncoderModel(LongT5PreTrainedModel):
 
         # Initialize weights and apply final processing
         self.post_init()
+
+        self._init_adapter_modules()
 
     def get_input_embeddings(self):
         return self.shared

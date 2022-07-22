@@ -120,6 +120,10 @@ _import_structure = {
         "T5AdapterModel",
         "T5ModelWithHeads",
     ],
+    "models.longt5": [
+        "LongT5AdapterModel",
+        "LongT5ModelWithHeads",
+    ],
     "models.vit": ["ViTAdapterModel"],
     "models.xlm_roberta": [
         "XLMRobertaAdapterModel",
@@ -209,6 +213,7 @@ if TYPE_CHECKING:
     from .models.mbart import MBartAdapterModel, MBartModelWithHeads
     from .models.roberta import RobertaAdapterModel, RobertaModelWithHeads
     from .models.t5 import T5AdapterModel, T5ModelWithHeads
+    from .models.longt5 import LongT5AdapterModel, LongT5ModelWithHeads
     from .models.vit import ViTAdapterModel
     from .models.xlm_roberta import XLMRobertaAdapterModel, XLMRobertaModelWithHeads
     from .trainer import AdapterTrainer, Seq2SeqAdapterTrainer

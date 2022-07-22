@@ -18,6 +18,7 @@ ADAPTER_MODEL_MAPPING_NAMES = OrderedDict(
         ("mbart", "MBartAdapterModel"),
         ("gpt2", "GPT2AdapterModel"),
         ("t5", "T5AdapterModel"),
+        ("longt5", "LongT5AdapterModel"),
         ("vit", "ViTAdapterModel"),
     ]
 )
@@ -31,6 +32,7 @@ MODEL_WITH_HEADS_MAPPING_NAMES = OrderedDict(
         ("mbart", "MBartModelWithHeads"),
         ("gpt2", "GPT2ModelWithHeads"),
         ("t5", "T5ModelWithHeads"),
+        ("longt5", "LongT5ModelWithHeads"),
     ]
 )
 
